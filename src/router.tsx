@@ -13,9 +13,14 @@ import { routeTree } from './routeTree.gen';
 export const getRouter = () => {
   const queryClient = new QueryClient();
 
+  // 关键：让 Router 知道部署子路径（本地开发=“/”，GitHub Pages=“/novel-workshop-standalone/”）
+  // 否则所有内部跳转都会跑到域名根目录，导致页面丢失
+  const BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') || '/'; // 去掉结尾斜杠，得到 “/novel-workshop-standalone” 或 “/”
+
   const router = createRouter({
     routeTree,
     context: { queryClient },
+    basepath: BASE,
     scrollRestoration: true,
     defaultPreloadStaleTime: 0,
   });
