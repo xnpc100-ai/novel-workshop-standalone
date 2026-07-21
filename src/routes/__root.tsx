@@ -29,7 +29,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 });
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { isActivated, email } = useAuth();
+  const { isActivated } = useAuth();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
 
   // 未激活且访问非首页,重定向到首页
@@ -37,9 +37,8 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
     return <Navigate to="/" replace />;
   }
 
-  // 已激活但未绑定邮箱，且访问首页，不重定向（让用户在首页完成邮箱绑定）
-  // 已激活且已绑定邮箱，且访问首页，重定向到核心仿写页
-  if (isActivated && email && pathname === '/') {
+  // 已激活且访问首页，自动跳到工作台（邮箱绑定是可选的，从设置里补即可）
+  if (isActivated && pathname === '/') {
     return <Navigate to="/core" replace />;
   }
 

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { useAuth } from '@/context/AuthContext';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -9,6 +10,7 @@ import { toast } from 'sonner';
 import { localDb } from '@/supabase/client';
 
 export function EmailBindDialog() {
+  const navigate = useNavigate();
   const { showEmailBindDialog, setShowEmailBindDialog, setEmail, email } = useAuth();
   const [bindEmail, setBindEmail] = useState('');
   const [bindCode, setBindCode] = useState('');
@@ -28,6 +30,16 @@ export function EmailBindDialog() {
     localDb.cleanExpiredCodes();
   }, []);
 
+  const goToWorkbench = () => {
+    setShowEmailBindDialog(false);
+    // 标记本次会话已跳过邮箱绑定（即使刷新也不再弹）
+    try { sessionStorage.setItem('email_bind_skipped', '1'); } catch {}
+    // 跳到工作台
+    setTimeout(() => {
+      try { navigate({ to: '/core' }); } catch { window.location.href = '/core'; }
+    }, 50);
+  };
+
   const handleSendCode = async () => {
     if (!bindEmail.trim()) {
       toast.error('请输入邮箱地址');
@@ -43,11 +55,11 @@ export function EmailBindDialog() {
     setSendingCode(true);
 
     // 模拟发送验证码（实际使用本地存储演示模式）
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise(resolve => setTimeout(resolve, 600));
 
     // 生成6位验证码
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    
+
     // 存储验证码（10分钟有效）
     localDb.email_codes[bindEmail] = {
       code: code,
@@ -55,11 +67,12 @@ export function EmailBindDialog() {
     };
     localDb.save();
 
+    // 演示模式：自动填入验证码，并 toast 提示
+    setBindCode(code);
     setSendingCode(false);
     setCountdown(60);
-    
-    // 演示模式：显示验证码
-    toast.success(`验证码已发送！（演示模式：${code}）`);
+
+    toast.success(`验证码已生成（演示模式已自动填入）：${code}`, { duration: 10000 });
 
     const timer = setInterval(() => {
       setCountdown(prev => {
@@ -99,20 +112,24 @@ export function EmailBindDialog() {
 
     // 验证成功
     await new Promise(resolve => setTimeout(resolve, 500));
-    
+
     setVerifying(false);
     setEmail(bindEmail);
     setShowEmailBindDialog(false);
-    
+
     // 删除已使用的验证码
     delete localDb.email_codes[bindEmail];
     localDb.save();
-    
+
     toast.success('邮箱绑定成功！');
+    setTimeout(() => {
+      try { navigate({ to: '/core' }); } catch { window.location.href = '/core'; }
+    }, 300);
   };
 
   const handleSkip = () => {
-    setShowEmailBindDialog(false);
+    goToWorkbench();
+    toast.info('已跳过邮箱绑定（可稍后在【个人中心→设置】中补绑）');
   };
 
   return (
@@ -121,10 +138,10 @@ export function EmailBindDialog() {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Mail className="w-5 h-5 text-primary" />
-            绑定邮箱
+            绑定邮箱（可选）
           </DialogTitle>
           <DialogDescription>
-            首次激活后需要绑定邮箱，用于接收验证码和找回密码
+            绑定邮箱可用于找回密码和接收重要通知。绑定是<strong>可选</strong>的，点"稍后绑定"直接进入工作台。
           </DialogDescription>
         </DialogHeader>
 
@@ -161,20 +178,20 @@ export function EmailBindDialog() {
               </Button>
             </div>
           </div>
-          
+
           <p className="text-xs text-muted-foreground">
-            💡 演示模式：点击"获取验证码"后，验证码会显示在成功提示中
+            💡 演示模式：点击"获取验证码"后，验证码会<strong>自动填入</strong>上方输入框（无需去邮箱找）
           </p>
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={handleSkip}>
-            稍后绑定
+        <DialogFooter className="flex-col sm:flex-row gap-2">
+          <Button variant="outline" onClick={handleSkip} className="w-full sm:w-auto">
+            稍后绑定（直接进入工作台）
           </Button>
           <Button
             onClick={handleVerifyEmail}
             disabled={!bindEmail || !bindCode || verifying}
-            className="bg-primary hover:bg-primary/90"
+            className="bg-primary hover:bg-primary/90 w-full sm:w-auto"
           >
             {verifying ? '验证中...' : '确认绑定'}
           </Button>

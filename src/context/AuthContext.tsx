@@ -32,7 +32,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const saved = localStorage.getItem('auth_state');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        // 如果之前已经跳过过邮箱绑定，且当前未绑定邮箱，不强制弹窗
+        if (parsed?.isActivated && !parsed?.email) {
+          const skipped = (() => { try { return sessionStorage.getItem('email_bind_skipped') === '1'; } catch { return false; } })();
+          if (skipped) {
+            return { ...parsed, showEmailBindDialog: false };
+          }
+        }
+        return parsed;
       } catch {
         return { isActivated: false };
       }
@@ -86,6 +94,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setShowEmailBindDialog = (show: boolean) => {
     setAuthState(prev => ({ ...prev, showEmailBindDialog: show }));
+    if (!show) {
+      try { sessionStorage.setItem('email_bind_skipped', '1'); } catch {}
+    }
   };
 
   const logout = () => {
