@@ -6,8 +6,11 @@ import tsConfigPaths from "vite-tsconfig-paths";
 
 /**
  * React + Vite 构建配置（纯前端standalone版本）
+ * 部署到 GitHub Pages 子路径
  */
 export default defineConfig({
+  // GitHub Pages 子路径配置
+  base: "/novel-workshop-standalone/",
   plugins: [
     tailwindcss(),
     TanStackRouterVite(),
@@ -17,7 +20,7 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 3015,
-    strictPort: false, // 允许端口回退
+    strictPort: false,
     allowedHosts: true,
     hmr: true,
   },
