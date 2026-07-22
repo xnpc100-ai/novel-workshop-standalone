@@ -8,13 +8,37 @@ import { Progress } from '@/components/ui/progress';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import mammoth from 'mammoth';
-import { getSupabaseUrl } from '@/supabase/client';
+import {
+  analyzeBook,
+  type AnalysisResult,
+} from '@/services/bookAnalysis';
+import {
+  translateLiterary,
+  type TranslationResult,
+  type TranslationMode,
+} from '@/services/translation';
+import {
+  generateRewrite,
+  generateSummary,
+  parseExercises,
+  type RewriteOutput,
+  type SummaryResult,
+  type ExerciseParseResult,
+} from '@/services/derivative';
+import {
+  analysisToDocx,
+  rewriteToDocx,
+  translationToDocx,
+  blocksToDocx,
+} from '@/services/exportDocx';
+import { LANGUAGES, LANG_BY_CODE } from '@/data/languages';
 import {
   BookOpen, FileText, Sparkles, Upload, BarChart3, Lightbulb,
   Target, TrendingUp, AlertCircle, CheckCircle2, Star,
   Layers, Users, Clock, Zap, Award, MessageSquare, X,
   Globe, PenTool, Download, Languages, Copy, ChevronDown, ChevronRight,
-  User, Map, ScrollText, Palette, Quote
+  User, Map, ScrollText, Palette, Quote, FileText as FileIcon,
+  CheckSquare, GraduationCap
 } from 'lucide-react';
 import { useState, useRef } from 'react';
 import { toast } from 'sonner';
@@ -23,139 +47,57 @@ export const Route = createFileRoute('/deconstruct')({
   component: DeconstructPage,
 });
 
-// 辅助类型定义
-interface ChapterOutline {
-  chapter: number;
-  title: string;
-  summary: string;
-  keyEvents: string[];
-}
-
-interface Faction {
-  name: string;
-  description: string;
-}
-
-interface Character {
-  name: string;
-  role: 'protagonist' | 'supporting' | 'antagonist';
-  personality: string;
-  background: string;
-  growth: string;
-  relationships: string[];
-}
-
-interface TurningPoint {
-  chapter: number;
-  description: string;
-}
-
-interface Subplot {
-  title: string;
-  relationToMain: string;
-}
-
-interface GoldenQuote {
-  text: string;
-  emotionTag: string;
-  rhetoricType: string;
-  position: string;
-  score: number;
-}
-
-interface AnalysisResult {
-  score: number;
-  structure: {
-    opening: string;
-    conflict: string;
-    climax: string;
-    resolution: string;
-  };
-  highlights: string[];
-  issues: string[];
-  suggestions: string[];
-  marketAnalysis: {
-    genre: string;
-    targetAudience: string;
-    competitionLevel: string;
-    potentialScore: number;
-  };
-  editorAdvice: string;
-  outline?: {
-    mainPlot: string;
-    chapterOutlines: ChapterOutline[];
-  };
-  worldBuilding?: {
-    background: string;
-    factions: Faction[];
-    magicSystem?: string;
-  };
-  characters?: Character[];
-  plotAnalysis?: {
-    rhythm: string;
-    turningPoints: TurningPoint[];
-    subplots: Subplot[];
-  };
-  themeAnalysis?: {
-    coreThemes: string[];
-    emotionalArc: string;
-  };
-  writingStyle?: {
-    perspective: string;
-    narrativeRhythm: string;
-    techniques: string[];
-  };
-  goldenQuotes?: GoldenQuote[];
-  derivativeWorks?: {
-    rewrite?: string;
-    summary?: {
-      oneSentence: string;
-      bulletPoints: string[];
-      detailed: string;
-    };
-  };
-  translations?: {
-    [lang: string]: {
-      translatedText: string;
-      bilingualVersion?: string;
-    };
-  };
-}
-
 function DeconstructPage() {
   const [novelText, setNovelText] = useState('');
   const [fileName, setFileName] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
-  
+  const [analysisProgress, setAnalysisProgress] = useState('');
+
   // 三大模块状态
   const [mainModule, setMainModule] = useState<'analysis' | 'creation' | 'translation'>('analysis');
-  
+
   // 智能拆书子模块
   const [analysisSubTab, setAnalysisSubTab] = useState<'structure' | 'characters' | 'plot' | 'style' | 'quotes'>('structure');
-  
+
   // 衍生创作子模块
-  const [creationSubTab, setCreationSubTab] = useState<'rewrite' | 'summary' | 'download'>('rewrite');
-  
+  const [creationSubTab, setCreationSubTab] = useState<'rewrite' | 'summary' | 'exercise' | 'download'>('rewrite');
+
   // 翻译模块状态
   const [sourceLang, setSourceLang] = useState('zh');
   const [targetLang, setTargetLang] = useState('en');
+  const [translateMode, setTranslateMode] = useState<TranslationMode>('bilingual');
   const [isTranslating, setIsTranslating] = useState(false);
-  
+  const [translateProgress, setTranslateProgress] = useState(0);
+  const [translateMsg, setTranslateMsg] = useState('');
+  const [translations, setTranslations] = useState<Record<string, TranslationResult>>({});
+
   // 仿写输入状态
   const [newBookName, setNewBookName] = useState('');
   const [newGenre, setNewGenre] = useState('');
   const [newSynopsis, setNewSynopsis] = useState('');
-  
+  const [rewriteDepth, setRewriteDepth] = useState<'light' | 'standard' | 'deep'>('standard');
+  const [isRewriting, setIsRewriting] = useState(false);
+  const [rewriteResult, setRewriteResult] = useState<RewriteOutput | null>(null);
+
+  // 摘要
+  const [isSummarizing, setIsSummarizing] = useState(false);
+  const [summaryResult, setSummaryResult] = useState<SummaryResult | null>(null);
+
+  // 习题拆解
+  const [exerciseText, setExerciseText] = useState('');
+  const [isParsing, setIsParsing] = useState(false);
+  const [exerciseResult, setExerciseResult] = useState<ExerciseParseResult | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    const fileName_lower = file.name.toLowerCase();
-    
-    if (fileName_lower.endsWith('.txt')) {
+    const fileNameLower = file.name.toLowerCase();
+
+    if (fileNameLower.endsWith('.txt')) {
       const reader = new FileReader();
       reader.onload = (e) => {
         const text = e.target?.result as string;
@@ -165,7 +107,7 @@ function DeconstructPage() {
       };
       reader.onerror = () => toast.error('文件读取失败');
       reader.readAsText(file, 'UTF-8');
-    } else if (fileName_lower.endsWith('.docx')) {
+    } else if (fileNameLower.endsWith('.docx')) {
       const reader = new FileReader();
       reader.onload = async (e) => {
         try {
@@ -184,7 +126,7 @@ function DeconstructPage() {
     } else {
       toast.error('仅支持TXT和DOCX格式文件');
     }
-    
+
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -195,6 +137,7 @@ function DeconstructPage() {
     toast.success('已清空内容');
   };
 
+  // ============ 智能拆书：真实调用 ============
   const handleAnalyze = async () => {
     if (!novelText.trim()) {
       toast.error('请先输入或粘贴小说文本');
@@ -206,113 +149,118 @@ function DeconstructPage() {
     }
 
     setIsAnalyzing(true);
+    setAnalysisProgress('AI 正在深度拆解（结构/人物/剧情/风格/金句/综合）...');
     try {
-      const response = await fetch(`${getSupabaseUrl()}/functions/v1/ai-novel-deconstruct`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: novelText }),
-      });
-      if (!response.ok) throw new Error(`API请求失败: ${response.status}`);
-      const result = await response.json();
-      if (result.error) throw new Error(result.error);
-      setAnalysisResult(result as AnalysisResult);
+      const result = await analyzeBook(novelText, (msg) => setAnalysisProgress(msg));
+      setAnalysisResult(result);
       toast.success('AI分析完成！');
-    } catch (error) {
-      console.warn('Edge Function调用失败，使用模拟数据:', error);
-      setTimeout(() => {
-        const mockResult: AnalysisResult = {
-          score: 82,
-          structure: {
-            opening: '开篇采用"黄金三章"结构，第一章快速引入主角身份和核心冲突',
-            conflict: '主线冲突明确，但支线冲突略显单薄',
-            climax: '高潮部分情绪渲染到位，爽点密集',
-            resolution: '结局处理较为圆满，留白空间可以更大'
-          },
-          highlights: ['主角人设接地气', '设定新颖', '爽点节奏把控良好', '配角塑造有特色'],
-          issues: ['更新节奏不稳定', '部分场景描写套路化', '次要角色存在感较弱'],
-          suggestions: ['稳定日更4000-6000字', '增加细节描写', '提升反派智商'],
-          marketAnalysis: {
-            genre: '都市修仙',
-            targetAudience: '18-35岁男性读者',
-            competitionLevel: '中等竞争，优质内容有突围机会',
-            potentialScore: 78
-          },
-          editorAdvice: '整体来看，这是一部有潜力的作品。建议深化人物塑造和情节设计。',
-          outline: {
-            mainPlot: '主角从普通外卖员意外获得修仙传承，逐步成长为至尊强者的故事',
-            chapterOutlines: [
-              { chapter: 1, title: '意外传承', summary: '主角获得神秘传承', keyEvents: ['获得玉佩', '觉醒灵力'] },
-              { chapter: 2, title: '初试身手', summary: '首次使用灵力解决危机', keyEvents: ['击退混混', '引起注意'] },
-              { chapter: 3, title: '踏入修行', summary: '正式开始修炼之路', keyEvents: ['拜师', '学习基础功法'] }
-            ]
-          },
-          worldBuilding: {
-            background: '现代都市中隐藏着修仙世界，普通人不知晓的存在',
-            factions: [
-              { name: '青云门', description: '传统修仙门派，历史悠久' },
-              { name: '暗影阁', description: '神秘组织，行事诡秘' }
-            ],
-            magicSystem: '灵力体系，分为炼气、筑基、金丹等境界'
-          },
-          characters: [
-            {
-              name: '林风',
-              role: 'protagonist',
-              personality: '坚韧不拔，重情重义',
-              background: '普通外卖员，父母早逝',
-              growth: '从凡人到修仙者的蜕变',
-              relationships: ['师父：青云长老', '好友：张三']
-            },
-            {
-              name: '苏婉',
-              role: 'supporting',
-              personality: '温柔善良，聪明机智',
-              background: '富家千金，隐藏身份',
-              growth: '逐渐展现实力',
-              relationships: ['暗恋主角']
-            }
-          ],
-          plotAnalysis: {
-            rhythm: '前期节奏较快，中期略有拖沓，后期紧凑',
-            turningPoints: [
-              { chapter: 1, description: '获得传承，命运转折' },
-              { chapter: 10, description: '首次重大危机' }
-            ],
-            subplots: [
-              { title: '感情线', relationToMain: '辅助主线，增加情感深度' }
-            ]
-          },
-          themeAnalysis: {
-            coreThemes: ['成长', '友情', '正义'],
-            emotionalArc: '从迷茫到坚定，从弱小到强大'
-          },
-          writingStyle: {
-            perspective: '第三人称限知视角',
-            narrativeRhythm: '张弛有度，高潮迭起',
-            techniques: ['伏笔铺垫', '悬念设置', '对比手法']
-          },
-          goldenQuotes: [
-            {
-              text: '真正的强者，不是没有眼泪，而是含着眼泪依然奔跑',
-              emotionTag: '励志',
-              rhetoricType: '对比',
-              position: '第5章',
-              score: 92
-            },
-            {
-              text: '修仙之路，修的不仅是力量，更是心境',
-              emotionTag: '哲理',
-              rhetoricType: '隐喻',
-              position: '第12章',
-              score: 88
-            }
-          ]
-        };
-        setAnalysisResult(mockResult);
-        toast.success('分析完成（模拟数据模式）');
-      }, 1500);
+    } catch (error: any) {
+      console.error(error);
+      toast.error(`分析失败：${error?.message || error}`);
     } finally {
       setIsAnalyzing(false);
+      setAnalysisProgress('');
+    }
+  };
+
+  // ============ 多语种翻译：真实调用 ============
+  const handleTranslate = async () => {
+    if (!novelText.trim()) {
+      toast.error('请先输入或上传小说文本');
+      return;
+    }
+    if (sourceLang === targetLang) {
+      toast.error('源语言与目标语言不能相同');
+      return;
+    }
+    setIsTranslating(true);
+    setTranslateProgress(0);
+    setTranslateMsg('准备翻译...');
+    try {
+      const result = await translateLiterary({
+        text: novelText,
+        src: sourceLang,
+        tgt: targetLang,
+        mode: translateMode,
+        onProgress: (pct, msg) => {
+          setTranslateProgress(pct);
+          setTranslateMsg(msg);
+        },
+      });
+      setTranslations((prev) => ({ ...prev, [targetLang]: result }));
+      toast.success(`翻译完成（${result.route.note}，共 ${result.chunkCount} 段）`);
+    } catch (error: any) {
+      console.error(error);
+      toast.error(`翻译失败：${error?.message || error}`);
+    } finally {
+      setIsTranslating(false);
+    }
+  };
+
+  // ============ 仿写重构：真实调用 ============
+  const handleRewrite = async () => {
+    if (!newBookName || !newGenre || !newSynopsis) {
+      toast.error('请填写完整的仿写信息');
+      return;
+    }
+    setIsRewriting(true);
+    try {
+      const result = await generateRewrite({
+        newTitle: newBookName,
+        genre: newGenre,
+        synopsis: newSynopsis,
+        sourceText: novelText.length > 200 ? novelText.slice(0, 15000) : undefined,
+        depth: rewriteDepth,
+      });
+      setRewriteResult(result);
+      toast.success('仿写框架生成完成！');
+    } catch (error: any) {
+      console.error(error);
+      toast.error(`仿写失败：${error?.message || error}`);
+    } finally {
+      setIsRewriting(false);
+    }
+  };
+
+  // ============ 内容摘要：真实调用 ============
+  const handleSummary = async () => {
+    if (!novelText.trim()) {
+      toast.error('请先输入或粘贴小说文本');
+      return;
+    }
+    if (novelText.length < 500) {
+      toast.error('文本内容过少，请至少输入500字');
+      return;
+    }
+    setIsSummarizing(true);
+    try {
+      const result = await generateSummary(novelText);
+      setSummaryResult(result);
+      toast.success('摘要生成完成！');
+    } catch (error: any) {
+      console.error(error);
+      toast.error(`摘要失败：${error?.message || error}`);
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
+
+  // ============ 习题拆解：真实调用 ============
+  const handleParseExercises = async () => {
+    if (!exerciseText.trim()) {
+      toast.error('请粘贴试题/试卷文本');
+      return;
+    }
+    setIsParsing(true);
+    try {
+      const result = await parseExercises(exerciseText);
+      setExerciseResult(result);
+      toast.success(`拆解完成，共 ${result.totalCount} 道题`);
+    } catch (error: any) {
+      console.error(error);
+      toast.error(`拆解失败：${error?.message || error}`);
+    } finally {
+      setIsParsing(false);
     }
   };
 
@@ -322,8 +270,7 @@ function DeconstructPage() {
     return 'text-orange-600';
   };
 
-  const downloadTXT = (content: string, filename: string) => {
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -331,6 +278,10 @@ function DeconstructPage() {
     a.click();
     URL.revokeObjectURL(url);
     toast.success('下载成功');
+  };
+
+  const downloadTXT = (content: string, filename: string) => {
+    downloadBlob(new Blob([content], { type: 'text/plain;charset=utf-8' }), filename);
   };
 
   const copyToClipboard = async (text: string) => {
@@ -342,67 +293,156 @@ function DeconstructPage() {
     }
   };
 
-  const handleTranslate = async () => {
-    if (!novelText.trim()) {
-      toast.error('请先输入或上传小说文本');
-      return;
+  // ============ 导出：Word / JSON / TXT ============
+  const exportAnalysisWord = async () => {
+    if (!analysisResult) return toast.error('请先分析');
+    try {
+      const base = fileName.replace(/\.(txt|docx)$/i, '') || '拆书分析';
+      const blob = await analysisToDocx(analysisResult, base);
+      downloadBlob(blob, `${base}_分析报告.docx`);
+    } catch (e: any) {
+      toast.error(`导出失败：${e?.message || e}`);
     }
-    setIsTranslating(true);
-    setTimeout(() => {
-      const mockTranslation = {
-        translatedText: `[${targetLang.toUpperCase()} Translation]\n\nThis is a simulated translation of the novel. In production, this would call a real translation API.`,
-        bilingualVersion: `原文：\n${novelText.substring(0, 200)}...\n\n译文：\n[Simulated translation content...]`
-      };
-      setAnalysisResult(prev => prev ? {
-        ...prev,
-        translations: { ...prev.translations, [targetLang]: mockTranslation }
-      } : null);
-      setIsTranslating(false);
-      toast.success('翻译完成（模拟数据）');
-    }, 1500);
   };
 
-  const handleRewrite = async () => {
-    if (!newBookName || !newGenre || !newSynopsis) {
-      toast.error('请填写完整的仿写信息');
-      return;
+  const exportRewriteWord = async () => {
+    if (!rewriteResult) return toast.error('请先生成仿写');
+    try {
+      const blob = await rewriteToDocx(rewriteResult);
+      downloadBlob(blob, `《${rewriteResult.title}》仿写框架.docx`);
+    } catch (e: any) {
+      toast.error(`导出失败：${e?.message || e}`);
     }
-    setIsAnalyzing(true);
-    setTimeout(() => {
-      const mockRewrite = `《${newBookName}》仿写框架\n\n类型：${newGenre}\n\n核心梗概：${newSynopsis}\n\n=== 大纲结构 ===\n\n第一章：开篇引入\n第二章：矛盾升级\n第三章：初次交锋\n\n=== 人物设定 ===\n\n主角：基于原书风格的新角色\n配角：支撑主线的关键人物`;
-      setAnalysisResult(prev => prev ? {
-        ...prev,
-        derivativeWorks: { ...prev.derivativeWorks, rewrite: mockRewrite }
-      } : null);
-      setIsAnalyzing(false);
-      toast.success('仿写生成完成（模拟数据）');
-    }, 1500);
   };
 
-  const generateSummary = () => {
-    if (!analysisResult) {
-      toast.error('请先进行分析');
-      return;
-    }
-    const mockSummary = {
-      oneSentence: '这是一部关于成长与奋斗的精彩故事，主角从平凡走向卓越。',
-      bulletPoints: ['主角身份：普通但具有特殊潜力', '核心冲突：个人成长与外部压力', '故事亮点：节奏紧凑、人物立体'],
-      detailed: '故事讲述了一个普通人如何通过不懈努力，在充满挑战的环境中逐步成长，最终实现自我价值的过程。作品融合了悬疑、冒险和情感元素，叙事节奏张弛有度。'
-    };
-    setAnalysisResult(prev => prev ? {
-      ...prev,
-      derivativeWorks: { ...prev.derivativeWorks, summary: mockSummary }
-    } : null);
-    toast.success('摘要生成完成');
+  const exportRewriteTXT = () => {
+    if (!rewriteResult) return toast.error('请先生成仿写');
+    let txt = '《' + rewriteResult.title + '》仿写框架\n' + '==================================\n\n';
+    txt += '【核心创意】\n' + rewriteResult.coreIdea + '\n\n';
+    txt += '【全书主线】\n' + rewriteResult.outline.mainPlot + '\n\n';
+    txt += '【章节细纲】\n';
+    rewriteResult.outline.chapterOutlines.forEach(function(ch) {
+      txt += '  第' + ch.chapter + '章 ' + ch.title + '\n  ' + ch.summary + '\n';
+    });
+    txt += '\n【人物设定】\n';
+    rewriteResult.characters.forEach(function(ch) {
+      txt += '  ' + ch.name + '（' + ch.role + '）\n  性格：' + ch.personality + ' · 背景：' + ch.background + '\n';
+    });
+    txt += '\n【世界观】\n' + rewriteResult.worldSetting.background + '\n';
+    txt += '关键元素：' + rewriteResult.worldSetting.keyElements.join(' / ') + '\n';
+    txt += '\n【写作风格】\n视角：' + rewriteResult.writingStyle.perspective + '\n技巧：' + rewriteResult.writingStyle.techniques.join(' / ') + '\n';
+    txt += '\n【市场建议】\n' + rewriteResult.marketAdvice + '\n';
+    downloadTXT(txt, '《' + rewriteResult.title + '》仿写框架.txt');
   };
 
-  const langOptions = [
-    { value: 'zh', label: '中文' },
-    { value: 'en', label: 'English' },
-    { value: 'ja', label: '日本語' },
-    { value: 'ko', label: '한국어' },
-    { value: 'fr', label: 'Français' }
-  ];
+
+  const exportTranslationWord = async (mode: 'bilingual' | 'clean') => {
+    const t = translations[targetLang];
+    if (!t) return toast.error('请先翻译');
+    try {
+      const src = LANG_BY_CODE[sourceLang];
+      const tgt = LANG_BY_CODE[targetLang];
+      const blob = await translationToDocx(
+        t.translatedText,
+        mode === 'bilingual' ? t.bilingualVersion : undefined,
+        src?.name || sourceLang,
+        tgt?.name || targetLang,
+        t.route.note
+      );
+      downloadBlob(blob, `翻译_${src?.name || sourceLang}_to_${tgt?.name || targetLang}.docx`);
+    } catch (e: any) {
+      toast.error(`导出失败：${e?.message || e}`);
+    }
+  };
+
+  const exportExercisesWord = async () => {
+    if (!exerciseResult) return toast.error('请先拆解');
+    try {
+      const blocks: Parameters<typeof blocksToDocx>[0] = [
+        { type: 'heading', level: 1, text: '习题拆解结果' },
+        { type: 'paragraph', align: 'center', text: `共 ${exerciseResult.totalCount} 题 · 生成时间 ${new Date().toLocaleString('zh-CN')}` },
+        { type: 'separator' },
+        { type: 'heading', level: 2, text: '知识点分布' },
+        {
+          type: 'table',
+          headers: ['知识点', '题数'],
+          rows: exerciseResult.knowledgeMap.map((k) => [k.point, String(k.count)]),
+        },
+        { type: 'heading', level: 2, text: '题目卡片' },
+        ...exerciseResult.cards.flatMap<Parameters<typeof blocksToDocx>[0][number]>((c) => [
+          { type: 'heading', level: 3, text: `[${c.id}] ${c.type}${c.difficulty ? ` · ${c.difficulty}` : ''}` },
+          { type: 'paragraph', text: `题干：${c.stem}` },
+          ...(c.options ? [{ type: 'list' as const, items: c.options }] : []),
+          { type: 'paragraph', text: `答案：${c.answer}` },
+          { type: 'paragraph', text: `解析：${c.analysis}` },
+          ...(c.knowledgePoint ? [{ type: 'paragraph' as const, text: `知识点：${c.knowledgePoint}` }] : []),
+          { type: 'separator' },
+        ]),
+      ];
+      const blob = await blocksToDocx(blocks, '习题拆解');
+      downloadBlob(blob, '习题拆解.docx');
+    } catch (e: any) {
+      toast.error(`导出失败：${e?.message || e}`);
+    }
+  };
+
+  const exportExerciseTXT = () => {
+    if (!exerciseResult) return toast.error('请先拆解');
+    let txt = '习题拆解结果（共 ' + exerciseResult.totalCount + ' 题）\n====================\n\n';
+    txt += '【知识点分布】\n' + exerciseResult.knowledgeMap.map(function(k) { return '  ' + k.point + '：' + k.count + '题'; }).join('\n') + '\n\n';
+    txt += '【题目卡片】\n--------------------------------------------\n';
+    exerciseResult.cards.forEach(function(card) {
+      txt += '[' + card.id + '] ' + card.type + (card.difficulty ? ' · ' + card.difficulty : '') + '\n';
+      txt += '题干：' + card.stem + '\n';
+      if (card.options) card.options.forEach(function(o, i) { txt += '  ' + String.fromCharCode(65+i) + '. ' + o + '\n'; });
+      txt += '答案：' + card.answer + '\n  解析：' + card.analysis + '\n';
+      if (card.knowledgePoint) txt += '  知识点：' + card.knowledgePoint + '\n';
+      txt += '\n';
+    });
+    downloadTXT(txt, '习题拆解.txt');
+  };
+
+
+  const exportSummaryWord = async () => {
+    if (!summaryResult) return toast.error('请先生成摘要');
+    try {
+      const blocks: Parameters<typeof blocksToDocx>[0] = [
+        { type: 'heading', level: 1, text: '内容摘要' },
+        { type: 'heading', level: 2, text: '一句话核心' },
+        { type: 'quote', text: summaryResult.oneSentence },
+        { type: 'heading', level: 2, text: '要点清单' },
+        { type: 'list', items: summaryResult.bulletPoints },
+        { type: 'heading', level: 2, text: '详细摘要' },
+        { type: 'paragraph', text: summaryResult.detailed },
+        { type: 'heading', level: 2, text: '关键事件' },
+        {
+          type: 'table',
+          headers: ['事件', '影响'],
+          rows: summaryResult.keyEvents.map((k) => [k.event, k.impact]),
+        },
+        { type: 'heading', level: 2, text: '核心主题' },
+        { type: 'list', items: summaryResult.themes },
+      ];
+      const blob = await blocksToDocx(blocks, '内容摘要');
+      downloadBlob(blob, '内容摘要.docx');
+    } catch (e: any) {
+      toast.error(`导出失败：${e?.message || e}`);
+    }
+  };
+
+  const exportSummaryTXT = () => {
+    if (!summaryResult) return toast.error('请先生成摘要');
+    let txt = '内容摘要\n====================\n\n';
+    txt += '【一句话核心】\n' + summaryResult.oneSentence + '\n\n';
+    txt += '【要点清单】\n' + summaryResult.bulletPoints.map(function(b, i) { return (i+1) + '. ' + b; }).join('\n') + '\n\n';
+    txt += '【详细摘要】\n' + summaryResult.detailed + '\n\n';
+    txt += '【关键事件】\n' + summaryResult.keyEvents.map(function(k) { return '· ' + k.event + ' → ' + k.impact; }).join('\n') + '\n\n';
+    txt += '【核心主题】\n' + summaryResult.themes.join(' / ') + '\n';
+    downloadTXT(txt, '内容摘要.txt');
+  };
+
+
+  const t = translations[targetLang];
 
   return (
     <div className="min-h-screen pb-16">
@@ -413,7 +453,7 @@ function DeconstructPage() {
             智能拆书分析
           </h1>
           <p className="text-lg text-muted-foreground">
-            AI深度解析小说结构，提取爆款要素，提供专业编辑级指导意见
+            AI深度解析小说结构，多语种出版级翻译，衍生创作与习题拆解，全链路真实可用
           </p>
         </div>
       </section>
@@ -457,6 +497,12 @@ function DeconstructPage() {
                 {isAnalyzing ? (<><Sparkles className="w-4 h-4 animate-spin" />分析中...</>) : (<><Sparkles className="w-4 h-4" />开始智能分析</>)}
               </Button>
             </div>
+            {isAnalyzing && analysisProgress && (
+              <div className="space-y-1">
+                <Progress value={90} />
+                <p className="text-xs text-muted-foreground text-center">{analysisProgress}</p>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -621,6 +667,21 @@ function DeconstructPage() {
                           </CardContent>
                         </Card>
                       )}
+                      {analysisResult.plotAnalysis?.subplots && analysisResult.plotAnalysis.subplots.length > 0 && (
+                        <Card>
+                          <CardHeader><CardTitle className="text-base">支线</CardTitle></CardHeader>
+                          <CardContent>
+                            <div className="space-y-2">
+                              {analysisResult.plotAnalysis.subplots.map((sp, i) => (
+                                <div key={i} className="flex items-start gap-2">
+                                  <Badge variant="outline">{sp.title}</Badge>
+                                  <p className="text-sm flex-1">{sp.relationToMain}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )}
                       {analysisResult.themeAnalysis && (
                         <Card>
                           <CardHeader><CardTitle className="text-base">主题与情感</CardTitle></CardHeader>
@@ -698,12 +759,15 @@ function DeconstructPage() {
                 {/* 衍生创作模块 */}
                 <TabsContent value="creation" className="space-y-6">
                   <Tabs value={creationSubTab} onValueChange={(v) => setCreationSubTab(v as any)} className="w-full">
-                    <TabsList className="grid w-full grid-cols-3 rounded-xl bg-muted p-1 mb-4">
+                    <TabsList className="grid w-full grid-cols-4 rounded-xl bg-muted p-1 mb-4">
                       <TabsTrigger value="rewrite" className="rounded-lg text-xs">
                         <PenTool className="w-3 h-3 mr-1" />仿写重构
                       </TabsTrigger>
                       <TabsTrigger value="summary" className="rounded-lg text-xs">
                         <ScrollText className="w-3 h-3 mr-1" />内容摘要
+                      </TabsTrigger>
+                      <TabsTrigger value="exercise" className="rounded-lg text-xs">
+                        <CheckSquare className="w-3 h-3 mr-1" />习题拆解
                       </TabsTrigger>
                       <TabsTrigger value="download" className="rounded-lg text-xs">
                         <Download className="w-3 h-3 mr-1" />下载导出
@@ -718,23 +782,81 @@ function DeconstructPage() {
                           <Input placeholder="新书名" value={newBookName} onChange={(e) => setNewBookName(e.target.value)} />
                           <Input placeholder="流派（如：都市修仙、玄幻、言情等）" value={newGenre} onChange={(e) => setNewGenre(e.target.value)} />
                           <Textarea placeholder="核心梗概（简要描述故事主线）" value={newSynopsis} onChange={(e) => setNewSynopsis(e.target.value)} className="min-h-[100px]" />
-                          <Button onClick={handleRewrite} disabled={!newBookName || !newGenre || !newSynopsis} className="w-full gap-2">
-                            <Sparkles className="w-4 h-4" />生成仿写框架
+                          <div>
+                            <label className="text-sm font-medium mb-2 block">仿写深度</label>
+                            <Select value={rewriteDepth} onValueChange={(v) => setRewriteDepth(v as any)}>
+                              <SelectTrigger><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="light">轻量（仅借鉴设定）</SelectItem>
+                                <SelectItem value="standard">标准（结构+风格）</SelectItem>
+                                <SelectItem value="deep">深度（风格迁移）</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <Button onClick={handleRewrite} disabled={!newBookName || !newGenre || !newSynopsis || isRewriting} className="w-full gap-2">
+                            {isRewriting ? (<><Sparkles className="w-4 h-4 animate-spin" />生成中...</>) : (<><Sparkles className="w-4 h-4" />生成仿写框架</>)}
                           </Button>
                         </CardContent>
                       </Card>
-                      {analysisResult.derivativeWorks?.rewrite && (
+                      {rewriteResult && (
                         <Card>
                           <CardHeader>
                             <div className="flex items-center justify-between">
-                              <CardTitle className="text-base">仿写结果</CardTitle>
-                              <Button variant="ghost" size="sm" onClick={() => copyToClipboard(analysisResult.derivativeWorks!.rewrite!)}>
-                                <Copy className="w-4 h-4" />
-                              </Button>
+                              <CardTitle className="text-base">《{rewriteResult.title}》仿写框架</CardTitle>
+                              <div className="flex gap-2">
+                                <Button variant="ghost" size="sm" onClick={() => copyToClipboard(rewriteResult.coreIdea)}><Copy className="w-4 h-4" /></Button>
+                                <Button variant="outline" size="sm" onClick={exportRewriteTXT}><Download className="w-4 h-4" />TXT</Button>
+                                <Button variant="outline" size="sm" onClick={exportRewriteWord}><FileIcon className="w-4 h-4" />Word</Button>
+                              </div>
                             </div>
                           </CardHeader>
-                          <CardContent>
-                            <pre className="text-sm whitespace-pre-line bg-muted p-4 rounded-lg overflow-x-auto">{analysisResult.derivativeWorks.rewrite}</pre>
+                          <CardContent className="space-y-4 text-sm">
+                            <div>
+                              <h4 className="font-semibold">核心创意</h4>
+                              <p className="text-muted-foreground mt-1">{rewriteResult.coreIdea}</p>
+                            </div>
+                            <div>
+                              <h4 className="font-semibold">全书主线</h4>
+                              <p className="text-muted-foreground mt-1">{rewriteResult.outline.mainPlot}</p>
+                            </div>
+                            <div>
+                              <h4 className="font-semibold">章节细纲</h4>
+                              <div className="space-y-1 mt-1">
+                                {rewriteResult.outline.chapterOutlines.map((c) => (
+                                  <div key={c.chapter} className="border-l-2 border-primary pl-3 py-1">
+                                    <p className="font-medium">第{c.chapter}章：{c.title}</p>
+                                    <p className="text-xs text-muted-foreground">{c.summary}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                            <div>
+                              <h4 className="font-semibold">人物设定</h4>
+                              {rewriteResult.characters.map((c, i) => (
+                                <div key={i} className="mt-1">
+                                  <p className="font-medium">{c.name}（{c.role}）</p>
+                                  <p className="text-xs text-muted-foreground">性格：{c.personality} · 背景：{c.background}</p>
+                                </div>
+                              ))}
+                            </div>
+                            <div>
+                              <h4 className="font-semibold">世界观</h4>
+                              <p className="text-muted-foreground mt-1">{rewriteResult.worldSetting.background}</p>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {rewriteResult.worldSetting.keyElements.map((e, i) => <Badge key={i} variant="outline" className="text-xs">{e}</Badge>)}
+                              </div>
+                            </div>
+                            <div>
+                              <h4 className="font-semibold">写作风格</h4>
+                              <p className="text-muted-foreground mt-1">视角：{rewriteResult.writingStyle.perspective}</p>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {rewriteResult.writingStyle.techniques.map((t, i) => <Badge key={i} variant="secondary" className="text-xs">{t}</Badge>)}
+                              </div>
+                            </div>
+                            <div>
+                              <h4 className="font-semibold">市场建议</h4>
+                              <p className="text-muted-foreground mt-1">{rewriteResult.marketAdvice}</p>
+                            </div>
                           </CardContent>
                         </Card>
                       )}
@@ -745,22 +867,27 @@ function DeconstructPage() {
                       <Card>
                         <CardHeader><CardTitle className="text-base">生成摘要</CardTitle></CardHeader>
                         <CardContent>
-                          <Button onClick={generateSummary} className="w-full gap-2">
-                            <Sparkles className="w-4 h-4" />生成三种粒度摘要
+                          <Button onClick={handleSummary} disabled={isSummarizing} className="w-full gap-2">
+                            {isSummarizing ? (<><Sparkles className="w-4 h-4 animate-spin" />生成中...</>) : (<><Sparkles className="w-4 h-4" />生成三种粒度摘要</>)}
                           </Button>
                         </CardContent>
                       </Card>
-                      {analysisResult.derivativeWorks?.summary && (
+                      {summaryResult && (
                         <div className="space-y-4">
                           <Card>
                             <CardHeader><CardTitle className="text-base">一句话摘要</CardTitle></CardHeader>
-                            <CardContent><p className="text-sm italic">{analysisResult.derivativeWorks.summary.oneSentence}</p></CardContent>
+                            <CardContent><p className="text-sm italic">{summaryResult.oneSentence}</p></CardContent>
                           </Card>
                           <Card>
-                            <CardHeader><CardTitle className="text-base">要点清单</CardTitle></CardHeader>
+                            <CardHeader>
+                              <div className="flex items-center justify-between">
+                                <CardTitle className="text-base">要点清单</CardTitle>
+                                <Button variant="outline" size="sm" onClick={exportSummaryWord}><FileIcon className="w-4 h-4" />Word</Button>
+                              </div>
+                            </CardHeader>
                             <CardContent>
                               <ul className="space-y-1">
-                                {analysisResult.derivativeWorks.summary.bulletPoints.map((point, i) => (
+                                {summaryResult.bulletPoints.map((point, i) => (
                                   <li key={i} className="text-sm flex items-start gap-2">
                                     <span className="text-primary">•</span>
                                     <span>{point}</span>
@@ -771,26 +898,138 @@ function DeconstructPage() {
                           </Card>
                           <Card>
                             <CardHeader><CardTitle className="text-base">详细摘要</CardTitle></CardHeader>
-                            <CardContent><p className="text-sm leading-relaxed">{analysisResult.derivativeWorks.summary.detailed}</p></CardContent>
+                            <CardContent><p className="text-sm leading-relaxed">{summaryResult.detailed}</p></CardContent>
                           </Card>
+                          {summaryResult.keyEvents.length > 0 && (
+                            <Card>
+                              <CardHeader><CardTitle className="text-base">关键事件</CardTitle></CardHeader>
+                              <CardContent>
+                                <div className="space-y-2">
+                                  {summaryResult.keyEvents.map((k, i) => (
+                                    <div key={i} className="border-l-2 border-primary pl-3">
+                                      <p className="text-sm font-medium">{k.event}</p>
+                                      <p className="text-xs text-muted-foreground">{k.impact}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </CardContent>
+                            </Card>
+                          )}
                         </div>
                       )}
-                    </TabsContent>
+                    
+                      {summaryResult && (
+                        <Card>
+                          <CardHeader>
+                            <div className="flex items-center justify-between">
+                              <CardTitle className="text-base">内容摘要</CardTitle>
+                              <div className="flex gap-2">
+                                <Button variant="outline" size="sm" onClick={exportSummaryTXT}><Download className="w-4 h-4" />TXT</Button>
+                                <Button variant="outline" size="sm" onClick={exportSummaryWord}><FileIcon className="w-4 h-4" />Word</Button>
+                              </div>
+                            </div>
+                          </CardHeader>
+                        </Card>
+                      )}
+</TabsContent>
+
+                    {/* 习题拆解 */}
+                    <TabsContent value="exercise" className="space-y-4">
+                      <Card>
+                        <CardHeader><CardTitle className="text-base flex items-center gap-2"><GraduationCap className="w-4 h-4 text-primary" />粘贴试题/试卷</CardTitle></CardHeader>
+                        <CardContent className="space-y-3">
+                          <Textarea
+                            placeholder="在此粘贴试题文本（支持单选/多选/填空/判断/简答/计算/应用题），系统将自动拆解为独立卡片..."
+                            className="min-h-[200px]"
+                            value={exerciseText}
+                            onChange={(e) => setExerciseText(e.target.value)}
+                          />
+                          <Button onClick={handleParseExercises} disabled={!exerciseText.trim() || isParsing} className="w-full gap-2">
+                            {isParsing ? (<><Sparkles className="w-4 h-4 animate-spin" />拆解中...</>) : (<><CheckSquare className="w-4 h-4" />开始拆解为卡片</>)}
+                          </Button>
+                        </CardContent>
+                      </Card>
+                      {exerciseResult && (
+                        <div className="space-y-4">
+                          <Card>
+                            <CardHeader>
+                              <div className="flex items-center justify-between">
+                                <CardTitle className="text-base">拆解结果（共 {exerciseResult.totalCount} 题）</CardTitle>
+                                <Button variant="outline" size="sm" onClick={exportExercisesWord}><FileIcon className="w-4 h-4" />导出Word</Button>
+                              </div>
+                            </CardHeader>
+                            <CardContent>
+                              <div className="flex flex-wrap gap-2 mb-3">
+                                {Object.entries(exerciseResult.byType).map(([k, v]) => (
+                                  <Badge key={k} variant="secondary">{k}：{v}</Badge>
+                                ))}
+                              </div>
+                              {exerciseResult.knowledgeMap.length > 0 && (
+                                <div className="mb-3">
+                                  <h4 className="text-sm font-semibold mb-1">知识点分布</h4>
+                                  <div className="flex flex-wrap gap-1">
+                                    {exerciseResult.knowledgeMap.map((k, i) => (
+                                      <Badge key={i} variant="outline" className="text-xs">{k.point}（{k.count}）</Badge>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </CardContent>
+                          </Card>
+                          {exerciseResult.cards.map((c) => (
+                            <Card key={c.id} className="border-l-4 border-l-blue-400">
+                              <CardHeader className="pb-2">
+                                <div className="flex items-center justify-between">
+                                  <CardTitle className="text-base text-sm">{c.id} · {c.type}{c.difficulty ? ` · ${c.difficulty}` : ''}</CardTitle>
+                                  <Button variant="ghost" size="sm" onClick={() => copyToClipboard(`题干：${c.stem}\n答案：${c.answer}`)}><Copy className="w-4 h-4" /></Button>
+                                </div>
+                              </CardHeader>
+                              <CardContent className="space-y-2 text-sm">
+                                <div><span className="font-medium">题干：</span>{c.stem}</div>
+                                {c.options && c.options.length > 0 && (
+                                  <ul className="ml-4 list-disc">
+                                    {c.options.map((o, j) => (<li key={j}>{o}</li>))}
+                                  </ul>
+                                )}
+                                <div><span className="font-medium">答案：</span><span className="text-green-600">{c.answer}</span></div>
+                                <div><span className="font-medium">解析：</span>{c.analysis}</div>
+                                {c.knowledgePoint && <div><span className="font-medium">知识点：</span><span className="text-primary">{c.knowledgePoint}</span></div>}
+                                {c.source && <div className="text-xs text-muted-foreground">出处：{c.source}</div>}
+                              </CardContent>
+                            </Card>
+                          ))}
+                        </div>
+                      )}
+                    
+                      {exerciseResult && (
+                        <Card>
+                          <CardHeader>
+                            <div className="flex items-center justify-between">
+                              <CardTitle className="text-base">习题拆解（{exerciseResult.totalCount} 题）</CardTitle>
+                              <div className="flex gap-2">
+                                <Button variant="outline" size="sm" onClick={exportExerciseTXT}><Download className="w-4 h-4" />TXT</Button>
+                                <Button variant="outline" size="sm" onClick={exportExercisesWord}><FileIcon className="w-4 h-4" />Word</Button>
+                              </div>
+                            </div>
+                          </CardHeader>
+                        </Card>
+                      )}
+</TabsContent>
 
                     {/* 下载导出 */}
                     <TabsContent value="download" className="space-y-4">
                       <Card>
                         <CardHeader><CardTitle className="text-base">导出分析报告</CardTitle></CardHeader>
                         <CardContent className="space-y-3">
-                          <p className="text-sm text-muted-foreground">将当前分析结果导出为本地文件，方便离线查看和编辑</p>
-                          <div className="flex gap-3">
-                            <Button onClick={() => {
+                          <p className="text-sm text-muted-foreground">将当前分析结果导出为本地文件，支持 JSON / TXT / Word（.docx）</p>
+                          <div className="flex flex-wrap gap-3">
+                            <Button variant="outline" onClick={() => {
                               const content = JSON.stringify(analysisResult, null, 2);
                               downloadTXT(content, '分析报告.json');
                             }} className="gap-2">
                               <Download className="w-4 h-4" />导出JSON
                             </Button>
-                            <Button onClick={() => {
+                            <Button variant="outline" onClick={() => {
                               let content = `=== 智能拆书分析报告 ===\n\n综合评分: ${analysisResult.score}/100\n\n`;
                               content += `【结构分析】\n开篇: ${analysisResult.structure.opening}\n冲突: ${analysisResult.structure.conflict}\n高潮: ${analysisResult.structure.climax}\n结局: ${analysisResult.structure.resolution}\n\n`;
                               content += `【亮点优势】\n${analysisResult.highlights.map(h => `- ${h}`).join('\n')}\n\n`;
@@ -801,7 +1040,31 @@ function DeconstructPage() {
                             }} className="gap-2">
                               <Download className="w-4 h-4" />导出TXT
                             </Button>
+                            <Button onClick={exportAnalysisWord} className="gap-2">
+                              <FileIcon className="w-4 h-4" />导出Word
+                            </Button>
                           </div>
+                          {t && (
+                            <div className="pt-4 border-t space-y-3">
+                              <p className="text-sm font-medium">翻译结果导出（{LANG_BY_CODE[sourceLang]?.name} → {LANG_BY_CODE[targetLang]?.name}）</p>
+                              <div className="flex flex-wrap gap-3">
+                                <Button variant="outline" onClick={() => exportTranslationWord('bilingual')} className="gap-2">
+                                  <FileIcon className="w-4 h-4" />双语对照Word
+                                </Button>
+                                <Button variant="outline" onClick={() => exportTranslationWord('clean')} className="gap-2">
+                                  <FileIcon className="w-4 h-4" />纯净译文Word
+                                </Button>
+                                <Button variant="outline" onClick={() => downloadTXT(t.translatedText, `翻译_纯净.txt`)} className="gap-2">
+                                  <Download className="w-4 h-4" />纯净译文TXT
+                                </Button>
+                                {t.bilingualVersion && (
+                                  <Button variant="outline" onClick={() => downloadTXT(t.bilingualVersion!, '双语对照.txt')} className="gap-2">
+                                    <Download className="w-4 h-4" />双语对照TXT
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </CardContent>
                       </Card>
                     </TabsContent>
@@ -811,18 +1074,16 @@ function DeconstructPage() {
                 {/* 多语种翻译模块 */}
                 <TabsContent value="translation" className="space-y-6">
                   <Card>
-                    <CardHeader><CardTitle className="text-base flex items-center gap-2"><Languages className="w-4 h-4 text-primary" />语言选择</CardTitle></CardHeader>
+                    <CardHeader><CardTitle className="text-base flex items-center gap-2"><Languages className="w-4 h-4 text-primary" />语言选择（50+ 语种 · 中英双核枢纽）</CardTitle></CardHeader>
                     <CardContent className="space-y-4">
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                           <label className="text-sm font-medium mb-2 block">源语言</label>
                           <Select value={sourceLang} onValueChange={setSourceLang}>
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
+                            <SelectTrigger><SelectValue /></SelectTrigger>
                             <SelectContent>
-                              {langOptions.map(lang => (
-                                <SelectItem key={lang.value} value={lang.value}>{lang.label}</SelectItem>
+                              {LANGUAGES.map((l) => (
+                                <SelectItem key={l.code} value={l.code}>{l.name}（{l.native}）</SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
@@ -830,57 +1091,78 @@ function DeconstructPage() {
                         <div>
                           <label className="text-sm font-medium mb-2 block">目标语言</label>
                           <Select value={targetLang} onValueChange={setTargetLang}>
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
+                            <SelectTrigger><SelectValue /></SelectTrigger>
                             <SelectContent>
-                              {langOptions.filter(l => l.value !== sourceLang).map(lang => (
-                                <SelectItem key={lang.value} value={lang.value}>{lang.label}</SelectItem>
+                              {LANGUAGES.filter((l) => l.code !== sourceLang).map((l) => (
+                                <SelectItem key={l.code} value={l.code}>{l.name}（{l.native}）</SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
                         </div>
                       </div>
-                      <Button onClick={handleTranslate} disabled={isTranslating} className="w-full gap-2">
-                        {isTranslating ? (<><Sparkles className="w-4 h-4 animate-spin" />翻译中...</>) : (<><Globe className="w-4 h-4" />开始翻译</>)}
+                      <div>
+                        <label className="text-sm font-medium mb-2 block">翻译模式</label>
+                        <Select value={translateMode} onValueChange={(v) => setTranslateMode(v as TranslationMode)}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="bilingual">双语对照（原文+译文）</SelectItem>
+                            <SelectItem value="clean">纯净译文（仅译文）</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3">
+                        <strong>路由提示：</strong>
+                        {sourceLang === 'zh' || sourceLang === 'en' || targetLang === 'zh' || targetLang === 'en'
+                          ? '当前为中英核心链路，直译。'
+                          : `当前选择非中英文互译，系统将通过${sourceLang === 'ja' || targetLang === 'ja' || sourceLang === 'ko' || targetLang === 'ko' ? '中文' : '中文（默认枢纽）'}枢纽中转，确保翻译质量。`}
+                      </div>
+                      <Button onClick={handleTranslate} disabled={isTranslating || sourceLang === targetLang} className="w-full gap-2">
+                        {isTranslating ? (<><Sparkles className="w-4 h-4 animate-spin" />翻译中... {translateProgress}%</>) : (<><Globe className="w-4 h-4" />开始翻译</>)}
                       </Button>
+                      {isTranslating && (
+                        <div className="space-y-1">
+                          <Progress value={translateProgress} />
+                          <p className="text-xs text-muted-foreground text-center">{translateMsg}</p>
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
 
-                  {analysisResult.translations?.[targetLang] && (
+                  {t && (
                     <div className="space-y-4">
-                      <Card>
-                        <CardHeader>
-                          <div className="flex items-center justify-between">
-                            <CardTitle className="text-base">翻译结果</CardTitle>
-                            <Button variant="ghost" size="sm" onClick={() => copyToClipboard(analysisResult.translations![targetLang].translatedText)}>
-                              <Copy className="w-4 h-4" />
-                            </Button>
-                          </div>
-                        </CardHeader>
-                        <CardContent>
-                          <pre className="text-sm whitespace-pre-line bg-muted p-4 rounded-lg overflow-x-auto max-h-[400px] overflow-y-auto">
-                            {analysisResult.translations[targetLang].translatedText}
-                          </pre>
-                        </CardContent>
-                      </Card>
-                      {analysisResult.translations[targetLang].bilingualVersion && (
+                      <div className="text-xs text-muted-foreground">
+                        {t.route.note} · 共 {t.chunkCount} 段 · 原文 {t.totalChars} 字
+                      </div>
+                      {t.bilingualVersion && translateMode === 'bilingual' && (
                         <Card>
                           <CardHeader>
                             <div className="flex items-center justify-between">
                               <CardTitle className="text-base">双语对照</CardTitle>
-                              <Button variant="ghost" size="sm" onClick={() => downloadTXT(analysisResult.translations![targetLang].bilingualVersion!, '双语对照.txt')}>
-                                <Download className="w-4 h-4" />
-                              </Button>
+                              <div className="flex gap-2">
+                                <Button variant="ghost" size="sm" onClick={() => downloadTXT(t.bilingualVersion!, '双语对照.txt')}><Download className="w-4 h-4" /></Button>
+                                <Button variant="ghost" size="sm" onClick={() => copyToClipboard(t.bilingualVersion!)}><Copy className="w-4 h-4" /></Button>
+                              </div>
                             </div>
                           </CardHeader>
                           <CardContent>
-                            <pre className="text-sm whitespace-pre-line bg-muted p-4 rounded-lg overflow-x-auto max-h-[400px] overflow-y-auto">
-                              {analysisResult.translations[targetLang].bilingualVersion}
-                            </pre>
+                            <pre className="text-sm whitespace-pre-line bg-muted p-4 rounded-lg overflow-x-auto max-h-[400px] overflow-y-auto">{t.bilingualVersion}</pre>
                           </CardContent>
                         </Card>
                       )}
+                      <Card>
+                        <CardHeader>
+                          <div className="flex items-center justify-between">
+                            <CardTitle className="text-base">纯净译文</CardTitle>
+                            <div className="flex gap-2">
+                              <Button variant="ghost" size="sm" onClick={() => downloadTXT(t.translatedText, '纯净译文.txt')}><Download className="w-4 h-4" /></Button>
+                              <Button variant="ghost" size="sm" onClick={() => copyToClipboard(t.translatedText)}><Copy className="w-4 h-4" /></Button>
+                            </div>
+                          </div>
+                        </CardHeader>
+                        <CardContent>
+                          <pre className="text-sm whitespace-pre-line bg-muted p-4 rounded-lg overflow-x-auto max-h-[400px] overflow-y-auto">{t.translatedText}</pre>
+                        </CardContent>
+                      </Card>
                     </div>
                   )}
                 </TabsContent>

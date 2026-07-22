@@ -50,6 +50,7 @@
     "embla-carousel-react": "^8.6.0",
     "framer-motion": "^11.18.2",
     "input-otp": "^1.4.2",
+    "jszip": "^3.10.1",
     "lucide-react": "^0.575.0",
     "mammoth": "^1.12.0",
     "react": "^19.2.0",
@@ -71,6 +72,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.4",
+    "playwright": "^1.61.1",
     "typescript": "^5.8.3",
     "vite": "^7.3.1"
   }
