@@ -1,0 +1,2 @@
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/index-C3RNl67h.js","assets/vendor-react-Be31kwRs.js","assets/jszip.min-BgI98Im9.js"])))=>i.map(i=>d[i]);
+import{_ as r}from"./index-DeWvaatd.js";import"./vendor-react-Be31kwRs.js";import"./vendor-ui-Cab3AQNz.js";async function n(t){return(await(await r(async()=>{const{default:a}=await import("./index-C3RNl67h.js").then(e=>e.i);return{default:a}},__vite__mapDeps([0,1,2]))).default.extractRawText({arrayBuffer:t})).value}export{n as extractDocxText};
